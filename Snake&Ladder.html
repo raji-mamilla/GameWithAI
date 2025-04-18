@@ -1,0 +1,418 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Snake and Ladder Game</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.2/p5.min.js"></script>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background-color: #f0f0f0;
+      font-family: Arial, sans-serif;
+    }
+    #gameContainer {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #scoreBoard {
+      margin-bottom: 10px;
+      font-size: 24px;
+      color: #333;
+    }
+    #rollButton {
+      padding: 10px 20px;
+      font-size: 18px;
+      cursor: pointer;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      margin-bottom: 10px;
+    }
+    #rollButton:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+    canvas {
+      margin-top: 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameContainer">
+    <div id="scoreBoard">Player: 1 | System: 1 | Turn: Player</div>
+    <button id="rollButton">Roll Dice</button>
+    <div id="canvasContainer"></div>
+  </div>
+  <script>
+    let playerPos = 1; // Start at row 9, col 0 (number 1)
+    let systemPos = 1; // Start at row 9, col 0 (number 1)
+    let currentTurn = 'player';
+    let diceValue = 0;
+    let isRolling = false;
+    let isMoving = false;
+    let gameOver = false;
+    let rollStartTime = 0;
+    let moveStartTime = 0;
+    let moveSteps = [];
+    let currentStep = 0;
+    let showDiceEndTime = 0;
+
+    // Snakes and ladders (start -> end, 1-based numbering)
+    const snakes = [
+      { start: 26, end: 4 },
+      { start: 58, end: 25 },
+      { start: 84, end: 27 },
+      { start: 67, end: 12 },
+      { start: 96, end: 22 }
+    ];
+    const ladders = [
+      { start: 5, end: 34 },
+      { start: 9, end: 29 },
+      { start: 16, end: 53 },
+      { start: 37, end: 68 },
+      { start: 58, end: 79 },
+      { start: 46, end: 97 },
+      { start: 71, end: 94 }
+    ];
+
+    function setup() {
+      createCanvas(600, 600).parent('canvasContainer');
+      textAlign(CENTER, CENTER);
+    }
+
+    function draw() {
+      if (gameOver) {
+        drawWinAnimation();
+        return;
+      }
+
+      drawBoard();
+      drawPlayers();
+      if (isRolling) {
+        drawDiceAnimation();
+      }
+      if (isMoving) {
+        handleMovement();
+      }
+    }
+
+    function drawBoard() {
+      background(255);
+      let tileSize = 60;
+      let startColor = color(46, 46, 46); // Shiny dark gray (#2E2E2E)
+      let endColor = color(107, 107, 107); // Shiny lighter gray (#6B6B6B)
+
+      for (let row = 0; row < 10; row++) {
+        for (let col = 0; col < 10; col++) {
+          let x = col * tileSize;
+          let y = (9 - row) * tileSize;
+          // Calculate number based on zigzag pattern
+          let visualRow = 9 - row; // Visual row (9 at bottom, 0 at top)
+          let num;
+          let baseNum = (9 - visualRow) * 10; // Base number for the row (0, 10, 20, ..., 90)
+          if (visualRow % 2 === 1) { // Odd visual rows (9, 7, 5, 3, 1): left to right
+            num = baseNum + col + 1;
+          } else { // Even visual rows (8, 6, 4, 2, 0): right to left
+            num = baseNum + (10 - col); // Adjusted to start at 11, 21, etc.
+          }
+          let t = (row + col) / 18; // Normalize to 0-1 across board
+          fill(lerpColor(startColor, endColor, t));
+          rect(x, y, tileSize, tileSize);
+          fill(255); // White numbers
+          textSize(12);
+          text(num, x + tileSize / 2, y + tileSize / 2);
+        }
+      }
+
+      // Draw white/greyish grid lines
+      stroke(211, 211, 211); // Light gray (#D3D3D3)
+      strokeWeight(1);
+      for (let i = 0; i <= 10; i++) {
+        line(i * tileSize, 0, i * tileSize, height); // Vertical
+        line(0, i * tileSize, width, i * tileSize); // Horizontal
+      }
+
+      // Draw snakes (wavier with 2 waves, light red, reduced thickness)
+      stroke(255, 102, 102); // Light red (#FF6666)
+      strokeWeight(5);
+      noFill();
+      for (let snake of snakes) {
+        let startPos = getTilePosition(snake.start);
+        let endPos = getTilePosition(snake.end);
+        // Calculate intermediate points for two waves
+        let midX1 = lerp(startPos.x, endPos.x, 0.33);
+        let midY1 = lerp(startPos.y, endPos.y, 0.33);
+        let midX2 = lerp(startPos.x, endPos.x, 0.66);
+        let midY2 = lerp(startPos.y, endPos.y, 0.66);
+        // First segment
+        bezier(
+          startPos.x, startPos.y,
+          startPos.x + 50, startPos.y - 50,
+          midX1 - 50, midY1 + 50,
+          midX1, midY1
+        );
+        // Second segment
+        bezier(
+          midX1, midY1,
+          midX1 + 50, midY1 - 50,
+          midX2 - 50, midY2 + 50,
+          midX2, midY2
+        );
+        // Third segment
+        bezier(
+          midX2, midY2,
+          midX2 + 50, midY2 - 50,
+          endPos.x - 50, endPos.y + 50,
+          endPos.x, endPos.y
+        );
+      }
+
+      // Draw ladders (light green, reduced size, thinner boundaries)
+      stroke(144, 238, 144); // Light green (#90EE90)
+      strokeWeight(2);
+      for (let ladder of ladders) {
+        let startPos = getTilePosition(ladder.start);
+        let endPos = getTilePosition(ladder.end);
+        line(startPos.x - 8, startPos.y, endPos.x - 8, endPos.y);
+        line(startPos.x + 8, startPos.y, endPos.x + 8, endPos.y);
+        for (let t = 0; t < 1; t += 0.2) {
+          let x1 = lerp(startPos.x - 8, endPos.x - 8, t);
+          let y1 = lerp(startPos.y, endPos.y, t);
+          let x2 = lerp(startPos.x + 8, endPos.x + 8, t);
+          let y2 = lerp(startPos.y, endPos.y, t);
+          line(x1, y1, x2, y2);
+        }
+      }
+      strokeWeight(1);
+      stroke(0);
+    }
+
+    function drawPlayers() {
+      let tileSize = 60;
+      let playerTile = getTilePosition(playerPos);
+      let systemTile = getTilePosition(systemPos);
+
+      // Player: Yellow circle with black 'P'
+      fill(255, 255, 0); // Yellow (#FFFF00)
+      ellipse(playerTile.x - 15, playerTile.y, 20, 20);
+      fill(0); // Black text
+      textSize(8);
+      text('P', playerTile.x - 15, playerTile.y);
+
+      // System: Pink circle with black 'S'
+      fill(255, 105, 180); // Pink (#FF69B4)
+      ellipse(systemTile.x + 15, systemTile.y, 20, 20);
+      fill(0); // Black text
+      text('S', systemTile.x + 15, systemTile.y);
+    }
+
+    function getTilePosition(num) {
+      let tileSize = 60;
+      // Find the row and column for the given number
+      let visualRow = 9 - Math.floor((num - 1) / 10); // Visual row (9 at bottom, 0 at top)
+      let row = 9 - visualRow; // Physical row (0 at bottom, 9 at top)
+      let col;
+      if (visualRow % 2 === 1) { // Odd visual rows (9, 7, 5, 3, 1): left to right
+        col = (num - 1) % 10;
+      } else { // Even visual rows (8, 6, 4, 2, 0): right to left
+        col = 9 - ((num - 1) % 10);
+      }
+      let x = col * tileSize + tileSize / 2;
+      let y = (9 - row) * tileSize + tileSize / 2;
+      return { x, y };
+    }
+
+    function drawDiceAnimation() {
+      let elapsed = (millis() - rollStartTime) / 1000;
+      let tempDice = elapsed < 1 ? floor(random(1, 7)) : diceValue;
+
+      // Draw dice background with rotation (white color)
+      push();
+      translate(width / 2, height / 2);
+      if (elapsed < 1) {
+        rotate(sin(millis() / 100) * PI / 4);
+      }
+      fill(255); // White dice
+      rect(-50, -50, 100, 100, 20);
+      fill(0);
+      drawDiceDots(tempDice, -50, -50, 100);
+      pop();
+
+      if (elapsed >= 1 && !showDiceEndTime) {
+        showDiceEndTime = millis();
+      }
+
+      if (showDiceEndTime && (millis() - showDiceEndTime) / 1000 >= 1) {
+        isRolling = false;
+        showDiceEndTime = 0;
+        setTimeout(startMovement, 0);
+      }
+    }
+
+    function drawDiceDots(value, x, y, size) {
+      let dotSize = size / 10;
+      let offset = size / 4;
+      let positions = [
+        [],
+        [[0, 0]],
+        [[-offset, -offset], [offset, offset]],
+        [[-offset, -offset], [0, 0], [offset, offset]],
+        [[-offset, -offset], [-offset, offset], [offset, -offset], [offset, offset]],
+        [[-offset, -offset], [-offset, offset], [0, 0], [offset, -offset], [offset, offset]],
+        [[-offset, -offset], [-offset, 0], [-offset, offset], [offset, -offset], [offset, 0], [offset, offset]]
+      ];
+
+      for (let pos of positions[value]) {
+        ellipse(x + size / 2 + pos[0], y + size / 2 + pos[1], dotSize, dotSize);
+      }
+    }
+
+    function handleMovement() {
+      let elapsed = (millis() - moveStartTime) / 1000;
+      if (currentStep < moveSteps.length && elapsed >= currentStep * 0.2) {
+        if (currentTurn === 'player') {
+          playerPos = moveSteps[currentStep];
+        } else {
+          systemPos = moveSteps[currentStep];
+        }
+        currentStep++;
+      }
+      if (currentStep >= moveSteps.length) {
+        isMoving = false;
+        checkWin();
+        if (!gameOver) {
+          currentTurn = currentTurn === 'player' ? 'system' : 'player';
+          updateScoreBoard();
+          setTimeout(autoRoll, 1000);
+        }
+      }
+    }
+
+    function drawWinAnimation() {
+      background(0);
+      let t = millis() / 1000;
+      for (let i = 0; i < 50; i++) {
+        let angle = random(TWO_PI);
+        let dist = random(50, 200);
+        let x = width / 2 + cos(angle) * dist * sin(t);
+        let y = height / 2 + sin(angle) * dist * sin(t);
+        fill(random(255), random(255), random(255));
+        ellipse(x, y, 10, 10);
+      }
+      fill(255);
+      textSize(40);
+      text(`${currentTurn.toUpperCase()} WINS!`, width / 2, height / 2);
+    }
+
+    function rollDice() {
+      if (isRolling || isMoving || gameOver) return;
+      isRolling = true;
+      rollStartTime = millis();
+      diceValue = floor(random(1, 7));
+      document.getElementById('rollButton').disabled = true;
+    }
+
+    function startMovement() {
+      let steps = [];
+      let currentPos = currentTurn === 'player' ? playerPos : systemPos;
+      let targetPos = currentPos + diceValue;
+      if (targetPos > 100) targetPos = currentPos;
+
+      for (let i = currentPos + 1; i <= targetPos; i++) {
+        steps.push(i);
+      }
+
+      let finalPos = targetPos;
+      for (let ladder of ladders) {
+        if (ladder.start === finalPos) {
+          steps.push(ladder.end);
+          finalPos = ladder.end;
+          break;
+        }
+      }
+      for (let snake of snakes) {
+        if (snake.start === finalPos) {
+          steps.push(snake.end);
+          finalPos = snake.end;
+          break;
+        }
+      }
+
+      moveSteps = steps;
+      currentStep = 0;
+      isMoving = true;
+      moveStartTime = millis();
+    }
+
+    function checkWin() {
+      if (playerPos === 100 || systemPos === 100) {
+        gameOver = true;
+        currentTurn = playerPos === 100 ? 'player' : 'system';
+        document.getElementById('rollButton').style.display = 'none';
+        updateScoreBoard();
+      }
+    }
+
+    function autoRoll() {
+      if (currentTurn === 'system' && !gameOver) {
+        rollDice();
+      } else {
+        document.getElementById('rollButton').disabled = false;
+      }
+    }
+
+    function updateScoreBoard() {
+      document.getElementById('scoreBoard').innerText = 
+        `Player: ${playerPos} | System: ${systemPos} | Turn: ${currentTurn.charAt(0).toUpperCase() + currentTurn.slice(1)}`;
+    }
+
+    document.getElementById('rollButton').addEventListener('click', rollDice);
+  </script>
+</body>
+</html>
